@@ -10,6 +10,7 @@ export default function TranscriptionForm() {
   const [transcription, setTranscription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [chunkProgress, setChunkProgress] = useState({ current: 0, total: 0 });
   const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -21,6 +22,7 @@ export default function TranscriptionForm() {
 
     setIsLoading(true);
     setProgress(0);
+    setChunkProgress({ current: 0, total: 0 });
     setTranscription('');
     const formData = new FormData();
     if (file) formData.append('file', file);
@@ -57,6 +59,9 @@ export default function TranscriptionForm() {
           }
           setProgress(update.progress);
           setTranscription(update.transcription);
+          if (update.chunkProgress) {
+            setChunkProgress(update.chunkProgress);
+          }
         }
       }
     } catch (error) {
@@ -142,6 +147,9 @@ export default function TranscriptionForm() {
       {isLoading && (
         <Box sx={{ width: '100%', mt: 2 }}>
           <LinearProgress variant="determinate" value={progress} />
+          <Typography variant="body2" align="center" sx={{ mt: 1 }}>
+            Processing chunk {chunkProgress.current} of {chunkProgress.total}
+          </Typography>
         </Box>
       )}
       {transcription && (

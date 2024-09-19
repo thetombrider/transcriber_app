@@ -119,7 +119,14 @@ export async function POST(req: NextRequest) {
         fullTranscription += transcription.text + ' ';
 
         const progress = Math.round(((i + 1) / chunks.length) * 100);
-        await writer.write(encoder.encode(JSON.stringify({ progress, transcription: fullTranscription.trim() })));
+        await writer.write(encoder.encode(JSON.stringify({ 
+          progress, 
+          transcription: fullTranscription.trim(),
+          chunkProgress: {
+            current: i + 1,
+            total: chunks.length
+          }
+        }) + '\n'));
       }
 
       // Clean up temporary files
