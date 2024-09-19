@@ -6,6 +6,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import ytdl from 'ytdl-core';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -46,38 +47,59 @@ async function splitAudio(filePath: string): Promise<string[]> {
   });
 }
 
+async function downloadFromUrl(url: string): Promise<string> {
+  const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
+  await ensureDir(tempDir);
+  const tempFilePath = path.join(tempDir, `input-${Date.now()}.mp3`);
+
+  if (ytdl.validateURL(url)) {
+    return new Promise((resolve, reject) => {
+      ytdl(url, { filter: 'audioonly' })
+        .pipe(fs.createWriteStream(tempFilePath))
+        .on('finish', () => resolve(tempFilePath))
+        .on('error', reject);
+    });
+  } else {
+    // For other URLs, you might need to implement a different download method
+    throw new Error('Unsupported URL type');
+  }
+}
+
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
 
-  const processChunks = async () => {
+  const processAudio = async () => {
     try {
       const formData = await req.formData();
-      const file = formData.get('file') as File;
+      const file = formData.get('file') as File | null;
+      const url = formData.get('url') as string | null;
       const apiKey = formData.get('apiKey') as string;
 
-      if (!file || !apiKey) {
-        throw new Error('File and API key are required');
-      }
-
-      const supportedFormats = ['flac', 'mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'ogg', 'wav', 'webm'];
-      const fileExtension = file.name.split('.').pop()?.toLowerCase();
-      if (!fileExtension || !supportedFormats.includes(fileExtension)) {
-        throw new Error('Unsupported file format');
+      if ((!file && !url) || !apiKey) {
+        throw new Error('File/URL and API key are required');
       }
 
       const openai = new OpenAI({ apiKey });
 
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
-      await ensureDir(tempDir);
-      const tempFilePath = path.join(tempDir, `input-${Date.now()}.${fileExtension}`);
-      await fsPromises.writeFile(tempFilePath, buffer);
+      let tempFilePath: string;
+      if (file) {
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
+        await ensureDir(tempDir);
+        tempFilePath = path.join(tempDir, `input-${Date.now()}.${file.name.split('.').pop()}`);
+        await fsPromises.writeFile(tempFilePath, buffer);
+      } else if (url) {
+        tempFilePath = await downloadFromUrl(url);
+      } else {
+        throw new Error('No file or URL provided');
+      }
 
       let chunks: string[];
-      if (buffer.length > MAX_FILE_SIZE) {
+      const fileStats = await fsPromises.stat(tempFilePath);
+      if (fileStats.size > MAX_FILE_SIZE) {
         chunks = await splitAudio(tempFilePath);
       } else {
         chunks = [tempFilePath];
@@ -85,6 +107,10 @@ export async function POST(req: NextRequest) {
 
       let fullTranscription = '';
       for (let i = 0; i < chunks.length; i++) {
+        if (req.signal.aborted) {
+          throw new Error('Transcription cancelled');
+        }
+
         const chunk = chunks[i];
         const transcription = await openai.audio.transcriptions.create({
           file: fs.createReadStream(chunk),
@@ -92,7 +118,6 @@ export async function POST(req: NextRequest) {
         });
         fullTranscription += transcription.text + ' ';
 
-        // Send progress update
         const progress = Math.round(((i + 1) / chunks.length) * 100);
         await writer.write(encoder.encode(JSON.stringify({ progress, transcription: fullTranscription.trim() })));
       }
@@ -113,7 +138,7 @@ export async function POST(req: NextRequest) {
     }
   };
 
-  processChunks();
+  processAudio();
 
   return new Response(stream.readable, {
     headers: { 'Content-Type': 'application/json' },

@@ -5,15 +5,17 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 export default function TranscriptionForm() {
   const [file, setFile] = useState<File | null>(null);
+  const [url, setUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [transcription, setTranscription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!file || !apiKey) {
-      console.error('File or API key missing');
+    if ((!file && !url) || !apiKey) {
+      console.error('File/URL or API key missing');
       return;
     }
 
@@ -21,13 +23,18 @@ export default function TranscriptionForm() {
     setProgress(0);
     setTranscription('');
     const formData = new FormData();
-    formData.append('file', file);
+    if (file) formData.append('file', file);
+    if (url) formData.append('url', url);
     formData.append('apiKey', apiKey);
+
+    const controller = new AbortController();
+    setAbortController(controller);
 
     try {
       const response = await fetch('/api/transcribe', {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -53,10 +60,21 @@ export default function TranscriptionForm() {
         }
       }
     } catch (error) {
-      console.error('Error:', error);
-      setTranscription(`An error occurred during transcription: ${error.message}`);
+      if (error.name === 'AbortError') {
+        setTranscription('Transcription cancelled');
+      } else {
+        console.error('Error:', error);
+        setTranscription(`An error occurred during transcription: ${error.message}`);
+      }
     } finally {
       setIsLoading(false);
+      setAbortController(null);
+    }
+  };
+
+  const handleCancel = () => {
+    if (abortController) {
+      abortController.abort();
     }
   };
 
@@ -74,7 +92,7 @@ export default function TranscriptionForm() {
             <input
               type="file"
               hidden
-              accept="audio/*"
+              accept="audio/*,video/*"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
           </Button>
@@ -86,21 +104,40 @@ export default function TranscriptionForm() {
         </Box>
         <TextField
           fullWidth
+          label="Or enter URL (YouTube, etc.)"
+          variant="outlined"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          sx={{ mb: 3 }}
+        />
+        <TextField
+          fullWidth
           label="OpenAI API Key"
           variant="outlined"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           sx={{ mb: 3 }}
         />
-        <Button
-          type="submit"
-          variant="contained"
-          color="primary"
-          disabled={isLoading || !file || !apiKey}
-          fullWidth
-        >
-          {isLoading ? <CircularProgress size={24} /> : 'Transcribe'}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            disabled={isLoading || (!file && !url) || !apiKey}
+            fullWidth
+          >
+            {isLoading ? <CircularProgress size={24} /> : 'Transcribe'}
+          </Button>
+          {isLoading && (
+            <Button
+              variant="contained"
+              color="secondary"
+              onClick={handleCancel}
+            >
+              Cancel
+            </Button>
+          )}
+        </Box>
       </form>
       {isLoading && (
         <Box sx={{ width: '100%', mt: 2 }}>
