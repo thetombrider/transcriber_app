@@ -51,7 +51,7 @@ export default function TranscriptionForm() {
         if (done) break;
 
         const chunk = decoder.decode(value);
-        const updates = chunk.split('\n').filter(Boolean).map(JSON.parse);
+        const updates = chunk.split('\n').filter(Boolean).map(item => JSON.parse(item));
 
         for (const update of updates) {
           if (update.error) {
