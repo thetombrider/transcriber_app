@@ -112,6 +112,7 @@ export async function POST(req: NextRequest) {
         }
 
         const chunk = chunks[i];
+        if (!chunk) continue; // Skip if chunk is undefined
         const transcription = await openai.audio.transcriptions.create({
           file: fs.createReadStream(chunk),
           model: 'whisper-1',
