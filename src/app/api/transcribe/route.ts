@@ -138,9 +138,10 @@ export async function POST(req: NextRequest) {
       }
 
       await writer.close();
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error:', error);
-      await writer.write(encoder.encode(JSON.stringify({ error: error.message })));
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+      await writer.write(encoder.encode(JSON.stringify({ error: errorMessage })));
       await writer.close();
     }
   };
