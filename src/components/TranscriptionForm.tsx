@@ -64,12 +64,17 @@ export default function TranscriptionForm() {
           }
         }
       }
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        setTranscription('Transcription cancelled');
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          setTranscription('Transcription cancelled');
+        } else {
+          console.error('Error:', error);
+          setTranscription(`An error occurred during transcription: ${error.message}`);
+        }
       } else {
-        console.error('Error:', error);
-        setTranscription(`An error occurred during transcription: ${error.message}`);
+        console.error('Unknown error:', error);
+        setTranscription('An unknown error occurred during transcription');
       }
     } finally {
       setIsLoading(false);
