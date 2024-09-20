@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import fs from 'fs';
-import fsPromises from 'fs/promises';
-import path from 'path';
-import os from 'os';
-import { mkdir } from 'fs/promises';
 import axios from 'axios';
 
 export async function POST(req: NextRequest) {
