@@ -32,15 +32,17 @@ async function splitAudio(filePath: string): Promise<string[]> {
       .outputOptions('-segment_time 300')
       .outputOptions('-c copy')
       .output(`${outputPrefix}%03d.mp3`)
-      .on('end', () => {
-        fsPromises.readdir(outputDir)
-          .then(files => {
-            const chunks = files
-              .filter(file => file.startsWith('chunk') && file.endsWith('.mp3'))
-              .map(file => path.join(outputDir, file));
-            resolve(chunks);
-          })
-          .catch(reject);
+      .on('end', async () => {
+        try {
+          const files = await fsPromises.readdir(outputDir);
+          const chunks = files
+            .filter(file => file.startsWith('chunk') && file.endsWith('.mp3'))
+            .map(file => path.join(outputDir, file))
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+          resolve(chunks);
+        } catch (error) {
+          reject(error);
+        }
       })
       .on('error', reject)
       .run();
@@ -97,13 +99,8 @@ export async function POST(req: NextRequest) {
         throw new Error('No file or URL provided');
       }
 
-      let chunks: string[];
       const fileStats = await fsPromises.stat(tempFilePath);
-      if (fileStats.size > MAX_FILE_SIZE) {
-        chunks = await splitAudio(tempFilePath);
-      } else {
-        chunks = [tempFilePath];
-      }
+      const chunks = fileStats.size > MAX_FILE_SIZE ? await splitAudio(tempFilePath) : [tempFilePath];
 
       let fullTranscription = '';
       for (let i = 0; i < chunks.length; i++) {
@@ -112,9 +109,11 @@ export async function POST(req: NextRequest) {
         }
 
         const chunk = chunks[i];
-        if (!chunk) continue; // Skip if chunk is undefined
+        if (!chunk) continue;
+
+        const chunkStream = fs.createReadStream(chunk);
         const transcription = await openai.audio.transcriptions.create({
-          file: fs.createReadStream(chunk),
+          file: chunkStream,
           model: 'whisper-1',
         });
         fullTranscription += transcription.text + ' ';
@@ -128,6 +127,9 @@ export async function POST(req: NextRequest) {
             total: chunks.length
           }
         }) + '\n'));
+
+        // Close the stream after each chunk
+        chunkStream.destroy();
       }
 
       // Clean up temporary files
