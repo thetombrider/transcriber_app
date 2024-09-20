@@ -89,6 +89,22 @@ async function getAudioFormat(filePath: string): Promise<string> {
   });
 }
 
+async function getAudioInfo(filePath: string): Promise<{ format: string; duration: number; bitrate: number }> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve({
+          format: metadata.format.format_name?.split(',')[0] || 'unknown',
+          duration: metadata.format.duration || 0,
+          bitrate: metadata.format.bit_rate ? parseInt(String(metadata.format.bit_rate)) : 0,
+        });
+      }
+    });
+  });
+}
+
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new TransformStream();
@@ -125,12 +141,12 @@ export async function POST(req: NextRequest) {
         throw new Error('No file or URL provided');
       }
 
-      // Check audio format
-      const audioFormat = await getAudioFormat(tempFilePath);
-      console.log(`Original audio format: ${audioFormat}`);
+      // Check audio format and properties
+      const audioInfo = await getAudioInfo(tempFilePath);
+      console.log('Audio file info:', audioInfo);
 
       // Convert the audio to MP3 if it's not already
-      if (!audioFormat.includes('mp3')) {
+      if (audioInfo.format !== 'mp3') {
         mp3FilePath = await convertToMp3(tempFilePath);
         console.log(`Converted MP3 file: ${mp3FilePath}`);
       } else {
@@ -138,10 +154,16 @@ export async function POST(req: NextRequest) {
         console.log(`File is already in MP3 format: ${mp3FilePath}`);
       }
 
-      // Check if the MP3 file exists and is not empty
-      const mp3Stats = await fsPromises.stat(mp3FilePath);
-      if (mp3Stats.size === 0) {
-        throw new Error('MP3 file is empty');
+      // Verify the MP3 file
+      const mp3Info = await getAudioInfo(mp3FilePath);
+      console.log('MP3 file info:', mp3Info);
+
+      if (mp3Info.duration < 0.1) {
+        throw new Error('Audio file is too short or empty');
+      }
+
+      if (mp3Info.bitrate < 32000 || mp3Info.bitrate > 256000) {
+        console.warn(`Unusual bitrate detected: ${mp3Info.bitrate}. This may cause issues.`);
       }
 
       const chunks = await splitAudioIntoChunks(mp3FilePath);
@@ -177,10 +199,10 @@ export async function POST(req: NextRequest) {
           chunkStream.destroy();
         } catch (error: any) {
           console.error(`Error processing chunk ${i + 1}:`, error);
-          if (error.response && error.response.status === 400) {
-            throw new Error(`The audio chunk ${i + 1} could not be decoded or its format is not supported.`);
+          if (error.response) {
+            console.error('API Response:', error.response.data);
           }
-          throw error;
+          throw new Error(`Error processing chunk ${i + 1}: ${error.message}`);
         }
       }
 
@@ -194,7 +216,7 @@ export async function POST(req: NextRequest) {
     } finally {
       // Clean up temporary files
       if (tempFilePath) await fsPromises.unlink(tempFilePath).catch(console.error);
-      if (mp3FilePath) await fsPromises.unlink(mp3FilePath).catch(console.error);
+      if (mp3FilePath && mp3FilePath !== tempFilePath) await fsPromises.unlink(mp3FilePath).catch(console.error);
       // Clean up chunk files
       const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
       const files = await fsPromises.readdir(tempDir);
