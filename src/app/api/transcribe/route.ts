@@ -55,12 +55,18 @@ async function downloadFromUrl(url: string): Promise<string> {
 }
 
 async function convertToMp3(inputPath: string): Promise<string> {
-  const outputPath = inputPath.replace(/\.[^/.]+$/, ".mp3");
+  const outputPath = path.join(path.dirname(inputPath), `converted-${Date.now()}.mp3`);
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
       .toFormat('mp3')
-      .on('end', () => resolve(outputPath))
-      .on('error', reject)
+      .on('error', (err) => {
+        console.error('Error in ffmpeg conversion:', err);
+        reject(err);
+      })
+      .on('end', () => {
+        console.log(`Successfully converted to MP3: ${outputPath}`);
+        resolve(outputPath);
+      })
       .save(outputPath);
   });
 }
@@ -71,6 +77,9 @@ export async function POST(req: NextRequest) {
   const writer = stream.writable.getWriter();
 
   const processAudio = async () => {
+    let tempFilePath: string | null = null;
+    let mp3FilePath: string | null = null;
+
     try {
       const formData = await req.formData();
       const file = formData.get('file') as File | null;
@@ -83,7 +92,6 @@ export async function POST(req: NextRequest) {
 
       const openai = new OpenAI({ apiKey });
 
-      let tempFilePath: string;
       if (file) {
         const arrayBuffer = await file.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
@@ -91,16 +99,26 @@ export async function POST(req: NextRequest) {
         await ensureDir(tempDir);
         tempFilePath = path.join(tempDir, `input-${Date.now()}.${file.name.split('.').pop()}`);
         await fsPromises.writeFile(tempFilePath, buffer);
+        console.log(`Original file saved to: ${tempFilePath}`);
       } else if (url) {
         tempFilePath = await downloadFromUrl(url);
+        console.log(`File downloaded from URL to: ${tempFilePath}`);
       } else {
         throw new Error('No file or URL provided');
       }
 
       // Convert the audio to MP3
-      const mp3FilePath = await convertToMp3(tempFilePath);
+      mp3FilePath = await convertToMp3(tempFilePath);
+      console.log(`Converted MP3 file: ${mp3FilePath}`);
+
+      // Check if the MP3 file exists and is not empty
+      const mp3Stats = await fsPromises.stat(mp3FilePath);
+      if (mp3Stats.size === 0) {
+        throw new Error('Converted MP3 file is empty');
+      }
 
       const chunks = await splitAudioIntoChunks(mp3FilePath);
+      console.log(`Split into ${chunks.length} chunks`);
 
       let fullTranscription = '';
       for (let i = 0; i < chunks.length; i++) {
@@ -111,6 +129,7 @@ export async function POST(req: NextRequest) {
         const chunk = chunks[i];
         const chunkStream = fs.createReadStream(chunk as string);
         try {
+          console.log(`Processing chunk ${i + 1}/${chunks.length}`);
           const transcription = await openai.audio.transcriptions.create({
             file: chunkStream,
             model: 'whisper-1',
@@ -130,26 +149,33 @@ export async function POST(req: NextRequest) {
 
           chunkStream.destroy();
         } catch (error: any) {
+          console.error(`Error processing chunk ${i + 1}:`, error);
           if (error.response && error.response.status === 400) {
-            throw new Error('The audio file could not be decoded or its format is not supported.');
+            throw new Error(`The audio chunk ${i + 1} could not be decoded or its format is not supported.`);
           }
           throw error;
         }
       }
 
-      // Clean up temporary files
-      await fsPromises.unlink(tempFilePath);
-      await fsPromises.unlink(mp3FilePath);
-      for (const chunk of chunks) {
-        await fsPromises.unlink(chunk);
-      }
-
+      console.log('Transcription completed successfully');
       await writer.close();
     } catch (error: unknown) {
-      console.error('Error:', error);
+      console.error('Error in processAudio:', error);
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
       await writer.write(encoder.encode(JSON.stringify({ error: errorMessage })));
       await writer.close();
+    } finally {
+      // Clean up temporary files
+      if (tempFilePath) await fsPromises.unlink(tempFilePath).catch(console.error);
+      if (mp3FilePath) await fsPromises.unlink(mp3FilePath).catch(console.error);
+      // Clean up chunk files
+      const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
+      const files = await fsPromises.readdir(tempDir);
+      for (const file of files) {
+        if (file.startsWith('chunk_')) {
+          await fsPromises.unlink(path.join(tempDir, file)).catch(console.error);
+        }
+      }
     }
   };
 
