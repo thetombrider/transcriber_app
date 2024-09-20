@@ -54,6 +54,17 @@ async function downloadFromUrl(url: string): Promise<string> {
   return tempFilePath;
 }
 
+async function convertToMp3(inputPath: string): Promise<string> {
+  const outputPath = inputPath.replace(/\.[^/.]+$/, ".mp3");
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .toFormat('mp3')
+      .on('end', () => resolve(outputPath))
+      .on('error', reject)
+      .save(outputPath);
+  });
+}
+
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new TransformStream();
@@ -86,7 +97,10 @@ export async function POST(req: NextRequest) {
         throw new Error('No file or URL provided');
       }
 
-      const chunks = await splitAudioIntoChunks(tempFilePath);
+      // Convert the audio to MP3
+      const mp3FilePath = await convertToMp3(tempFilePath);
+
+      const chunks = await splitAudioIntoChunks(mp3FilePath);
 
       let fullTranscription = '';
       for (let i = 0; i < chunks.length; i++) {
@@ -125,6 +139,7 @@ export async function POST(req: NextRequest) {
 
       // Clean up temporary files
       await fsPromises.unlink(tempFilePath);
+      await fsPromises.unlink(mp3FilePath);
       for (const chunk of chunks) {
         await fsPromises.unlink(chunk);
       }
