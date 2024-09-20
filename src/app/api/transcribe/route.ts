@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
@@ -6,65 +6,63 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import ytdl from 'ytdl-core';
+import { ensureDir } from 'fs-extra';
+import axios from 'axios';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+const CHUNK_SIZE = 1024 * 1024 * 1024; // 1 MB
 
-async function ensureDir(dir: string) {
-  try {
-    await fsPromises.access(dir);
-  } catch {
-    await fsPromises.mkdir(dir, { recursive: true });
-  }
-}
-
-async function splitAudio(filePath: string): Promise<string[]> {
+async function splitAudioIntoChunks(filePath: string): Promise<string[]> {
   const outputDir = path.join(os.tmpdir(), 'transcriber-temp');
   await ensureDir(outputDir);
 
-  const outputPrefix = path.join(outputDir, 'chunk');
-  
+  const duration = await getAudioDuration(filePath);
+  const chunkDuration = await calculateChunkDuration(filePath, CHUNK_SIZE);
+  const numberOfChunks = Math.ceil(duration / chunkDuration);
+
+  const chunkPromises = Array.from({ length: numberOfChunks }, (_, i) =>
+    splitChunk(filePath, outputDir, i, chunkDuration)
+  );
+
+  return Promise.all(chunkPromises);
+}
+
+async function getAudioDuration(filePath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata.format.duration || 0);
+    });
+  });
+}
+
+async function calculateChunkDuration(filePath: string, targetSize: number): Promise<number> {
+  const { size } = await fsPromises.stat(filePath);
+  const duration = await getAudioDuration(filePath);
+  return (duration * targetSize) / size;
+}
+
+async function splitChunk(filePath: string, outputDir: string, index: number, chunkDuration: number): Promise<string> {
+  const outputPath = path.join(outputDir, `chunk_${index}.mp3`);
   return new Promise((resolve, reject) => {
     ffmpeg(filePath)
-      .outputOptions('-f segment')
-      .outputOptions('-segment_time 300')
-      .outputOptions('-c copy')
-      .output(`${outputPrefix}%03d.mp3`)
-      .on('end', async () => {
-        try {
-          const files = await fsPromises.readdir(outputDir);
-          const chunks = files
-            .filter(file => file.startsWith('chunk') && file.endsWith('.mp3'))
-            .map(file => path.join(outputDir, file))
-            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-          resolve(chunks);
-        } catch (error) {
-          reject(error);
-        }
-      })
+      .setStartTime(index * chunkDuration)
+      .setDuration(chunkDuration)
+      .output(outputPath)
+      .on('end', () => resolve(outputPath))
       .on('error', reject)
       .run();
   });
 }
 
 async function downloadFromUrl(url: string): Promise<string> {
+  const response = await axios.get(url, { responseType: 'arraybuffer' });
   const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
   await ensureDir(tempDir);
   const tempFilePath = path.join(tempDir, `input-${Date.now()}.mp3`);
-
-  if (ytdl.validateURL(url)) {
-    return new Promise((resolve, reject) => {
-      ytdl(url, { filter: 'audioonly' })
-        .pipe(fs.createWriteStream(tempFilePath))
-        .on('finish', () => resolve(tempFilePath))
-        .on('error', reject);
-    });
-  } else {
-    // For other URLs, you might need to implement a different download method
-    throw new Error('Unsupported URL type');
-  }
+  await fsPromises.writeFile(tempFilePath, response.data);
+  return tempFilePath;
 }
 
 export async function POST(req: NextRequest) {
@@ -99,8 +97,7 @@ export async function POST(req: NextRequest) {
         throw new Error('No file or URL provided');
       }
 
-      const fileStats = await fsPromises.stat(tempFilePath);
-      const chunks = fileStats.size > MAX_FILE_SIZE ? await splitAudio(tempFilePath) : [tempFilePath];
+      const chunks = await splitAudioIntoChunks(tempFilePath);
 
       let fullTranscription = '';
       for (let i = 0; i < chunks.length; i++) {
@@ -109,9 +106,7 @@ export async function POST(req: NextRequest) {
         }
 
         const chunk = chunks[i];
-        if (!chunk) continue;
-
-        const chunkStream = fs.createReadStream(chunk);
+        const chunkStream = fs.createReadStream(chunk as string);
         const transcription = await openai.audio.transcriptions.create({
           file: chunkStream,
           model: 'whisper-1',
@@ -122,22 +117,20 @@ export async function POST(req: NextRequest) {
         await writer.write(encoder.encode(JSON.stringify({ 
           progress, 
           transcription: fullTranscription.trim(),
+          chunkTranscription: transcription.text.trim(),
           chunkProgress: {
             current: i + 1,
             total: chunks.length
           }
         }) + '\n'));
 
-        // Close the stream after each chunk
         chunkStream.destroy();
       }
 
       // Clean up temporary files
       await fsPromises.unlink(tempFilePath);
       for (const chunk of chunks) {
-        if (chunk !== tempFilePath) {
-          await fsPromises.unlink(chunk);
-        }
+        await fsPromises.unlink(chunk);
       }
 
       await writer.close();
@@ -151,7 +144,11 @@ export async function POST(req: NextRequest) {
 
   processAudio();
 
-  return new Response(stream.readable, {
-    headers: { 'Content-Type': 'application/json' },
+  return new NextResponse(stream.readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
   });
 }
