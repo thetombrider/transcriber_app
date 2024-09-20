@@ -4,7 +4,7 @@ import { Button, TextField, Typography, Box, CircularProgress, Paper, LinearProg
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 // Make sure this matches the MAX_FILE_SIZE in the API route
-const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1 MB
+//const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1 MB
 
 export default function TranscriptionForm() {
   const [file, setFile] = useState<File | null>(null);
