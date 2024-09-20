@@ -11,44 +11,33 @@ import axios from 'axios';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const CHUNK_SIZE = 20 * 1024 * 1024; // 20 MB
+const CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB
 
 async function splitAudioIntoChunks(filePath: string): Promise<string[]> {
   const outputDir = path.join(os.tmpdir(), 'transcriber-temp');
   await ensureDir(outputDir);
 
-  const duration = await getAudioDuration(filePath);
-  const chunkDuration = await calculateChunkDuration(filePath, CHUNK_SIZE);
-  const numberOfChunks = Math.ceil(duration / chunkDuration);
+  const { size } = await fsPromises.stat(filePath);
+  const numberOfChunks = Math.ceil(size / CHUNK_SIZE);
 
   const chunkPromises = Array.from({ length: numberOfChunks }, (_, i) =>
-    splitChunk(filePath, outputDir, i, chunkDuration)
+    splitChunk(filePath, outputDir, i, CHUNK_SIZE, size)
   );
 
   return Promise.all(chunkPromises);
 }
 
-async function getAudioDuration(filePath: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) reject(err);
-      else resolve(metadata.format.duration || 0);
-    });
-  });
-}
-
-async function calculateChunkDuration(filePath: string, targetSize: number): Promise<number> {
-  const { size } = await fsPromises.stat(filePath);
-  const duration = await getAudioDuration(filePath);
-  return (duration * targetSize) / size;
-}
-
-async function splitChunk(filePath: string, outputDir: string, index: number, chunkDuration: number): Promise<string> {
+async function splitChunk(filePath: string, outputDir: string, index: number, chunkSize: number, totalSize: number): Promise<string> {
   const outputPath = path.join(outputDir, `chunk_${index}.mp3`);
+  const start = index * chunkSize;
+  const end = Math.min((index + 1) * chunkSize, totalSize) - 1;
+
   return new Promise((resolve, reject) => {
     ffmpeg(filePath)
-      .setStartTime(index * chunkDuration)
-      .setDuration(chunkDuration)
+      .setStartTime(0)
+      .setDuration(0)
+      .inputOptions(`-ss ${start}`)
+      .inputOptions(`-to ${end}`)
       .output(outputPath)
       .on('end', () => resolve(outputPath))
       .on('error', reject)
