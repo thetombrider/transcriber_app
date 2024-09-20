@@ -8,7 +8,6 @@ export async function POST(req: NextRequest) {
   const writer = stream.writable.getWriter();
 
   const processAudio = async () => {
-    let audioFilePath: string | null = null;
 
     try {
       const formData = await req.formData();
