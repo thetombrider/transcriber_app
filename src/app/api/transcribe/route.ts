@@ -61,6 +61,8 @@ async function convertToMp3(inputPath: string): Promise<string> {
       .toFormat('mp3')
       .audioCodec('libmp3lame')
       .audioBitrate('128k')
+      .audioChannels(1)
+      .audioFrequency(16000)
       .on('error', (err) => {
         console.error('Error in ffmpeg conversion:', err);
         reject(err);
