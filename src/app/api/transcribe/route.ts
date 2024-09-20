@@ -11,33 +11,32 @@ import axios from 'axios';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB
 
 async function splitAudioIntoChunks(filePath: string): Promise<string[]> {
   const outputDir = path.join(os.tmpdir(), 'transcriber-temp');
   await ensureDir(outputDir);
 
-  const { size } = await fsPromises.stat(filePath);
-  const numberOfChunks = Math.ceil(size / CHUNK_SIZE);
+  const { duration } = await getAudioInfo(filePath);
+  const chunkDuration = 10 * 60; // 10 minutes per chunk
+  const numberOfChunks = Math.ceil(duration / chunkDuration);
 
   const chunkPromises = Array.from({ length: numberOfChunks }, (_, i) =>
-    splitChunk(filePath, outputDir, i, CHUNK_SIZE, size)
+    splitChunk(filePath, outputDir, i, chunkDuration, duration)
   );
 
   return Promise.all(chunkPromises);
 }
 
-async function splitChunk(filePath: string, outputDir: string, index: number, chunkSize: number, totalSize: number): Promise<string> {
-  const outputPath = path.join(outputDir, `chunk_${index}.mp3`);
-  const start = index * chunkSize;
-  const end = Math.min((index + 1) * chunkSize, totalSize) - 1;
+async function splitChunk(filePath: string, outputDir: string, index: number, chunkDuration: number, totalDuration: number): Promise<string> {
+  const outputPath = path.join(outputDir, `chunk_${index}${path.extname(filePath)}`);
+  const start = index * chunkDuration;
+  const duration = Math.min(chunkDuration, totalDuration - start);
 
   return new Promise((resolve, reject) => {
     ffmpeg(filePath)
-      .setStartTime(0)
-      .setDuration(0)
-      .inputOptions(`-ss ${start}`)
-      .inputOptions(`-to ${end}`)
+      .setStartTime(start)
+      .setDuration(duration)
       .output(outputPath)
       .on('end', () => resolve(outputPath))
       .on('error', reject)
@@ -52,41 +51,6 @@ async function downloadFromUrl(url: string): Promise<string> {
   const tempFilePath = path.join(tempDir, `input-${Date.now()}.mp3`);
   await fsPromises.writeFile(tempFilePath, response.data);
   return tempFilePath;
-}
-
-async function convertToMp3(inputPath: string): Promise<string> {
-  const outputPath = path.join(path.dirname(inputPath), `converted-${Date.now()}.mp3`);
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .toFormat('mp3')
-      .audioCodec('libmp3lame')
-      .audioBitrate('128k')
-      .audioChannels(1)
-      .audioFrequency(16000)
-      .on('error', (err) => {
-        console.error('Error in ffmpeg conversion:', err);
-        reject(err);
-      })
-      .on('end', () => {
-        console.log(`Successfully converted to MP3: ${outputPath}`);
-        resolve(outputPath);
-      })
-      .save(outputPath);
-  });
-}
-
-async function getAudioFormat(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        reject(err);
-      } else if (typeof metadata.format.format_name === 'string') {
-        resolve(metadata.format.format_name);
-      } else {
-        reject(new Error('Invalid format_name'));
-      }
-    });
-  });
 }
 
 async function getAudioInfo(filePath: string): Promise<{ format: string; duration: number; bitrate: number }> {
@@ -111,8 +75,7 @@ export async function POST(req: NextRequest) {
   const writer = stream.writable.getWriter();
 
   const processAudio = async () => {
-    let tempFilePath: string | null = null;
-    let mp3FilePath: string | null = null;
+    let audioFilePath: string | null = null;
 
     try {
       const formData = await req.formData();
@@ -131,42 +94,25 @@ export async function POST(req: NextRequest) {
         const buffer = Buffer.from(arrayBuffer);
         const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
         await ensureDir(tempDir);
-        tempFilePath = path.join(tempDir, `input-${Date.now()}.${file.name.split('.').pop()}`);
-        await fsPromises.writeFile(tempFilePath, buffer);
-        console.log(`Original file saved to: ${tempFilePath}`);
+        audioFilePath = path.join(tempDir, `input-${Date.now()}.${file.name.split('.').pop()}`);
+        await fsPromises.writeFile(audioFilePath, buffer);
+        console.log(`Original file saved to: ${audioFilePath}`);
       } else if (url) {
-        tempFilePath = await downloadFromUrl(url);
-        console.log(`File downloaded from URL to: ${tempFilePath}`);
+        audioFilePath = await downloadFromUrl(url);
+        console.log(`File downloaded from URL to: ${audioFilePath}`);
       } else {
         throw new Error('No file or URL provided');
       }
 
       // Check audio format and properties
-      const audioInfo = await getAudioInfo(tempFilePath);
+      const audioInfo = await getAudioInfo(audioFilePath);
       console.log('Audio file info:', audioInfo);
 
-      // Convert the audio to MP3 if it's not already
-      if (audioInfo.format !== 'mp3') {
-        mp3FilePath = await convertToMp3(tempFilePath);
-        console.log(`Converted MP3 file: ${mp3FilePath}`);
-      } else {
-        mp3FilePath = tempFilePath;
-        console.log(`File is already in MP3 format: ${mp3FilePath}`);
-      }
-
-      // Verify the MP3 file
-      const mp3Info = await getAudioInfo(mp3FilePath);
-      console.log('MP3 file info:', mp3Info);
-
-      if (mp3Info.duration < 0.1) {
+      if (audioInfo.duration < 0.1) {
         throw new Error('Audio file is too short or empty');
       }
 
-      if (mp3Info.bitrate < 32000 || mp3Info.bitrate > 256000) {
-        console.warn(`Unusual bitrate detected: ${mp3Info.bitrate}. This may cause issues.`);
-      }
-
-      const chunks = await splitAudioIntoChunks(mp3FilePath);
+      const chunks = await splitAudioIntoChunks(audioFilePath);
       console.log(`Split into ${chunks.length} chunks`);
 
       let fullTranscription = '';
@@ -182,6 +128,7 @@ export async function POST(req: NextRequest) {
           const transcription = await openai.audio.transcriptions.create({
             file: chunkStream,
             model: 'whisper-1',
+            language: 'it'  // Specify Italian language
           });
           fullTranscription += transcription.text + ' ';
 
@@ -215,8 +162,7 @@ export async function POST(req: NextRequest) {
       await writer.close();
     } finally {
       // Clean up temporary files
-      if (tempFilePath) await fsPromises.unlink(tempFilePath).catch(console.error);
-      if (mp3FilePath && mp3FilePath !== tempFilePath) await fsPromises.unlink(mp3FilePath).catch(console.error);
+      if (audioFilePath) await fsPromises.unlink(audioFilePath).catch(console.error);
       // Clean up chunk files
       const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
       const files = await fsPromises.readdir(tempDir);
