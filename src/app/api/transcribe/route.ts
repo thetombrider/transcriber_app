@@ -6,7 +6,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { ensureDir } from 'fs-extra';
+import { mkdir } from 'fs/promises';
 import axios from 'axios';
 
 let ffmpeg: FFmpeg | null = null;
@@ -15,7 +15,7 @@ let ffmpeg: FFmpeg | null = null;
 
 async function splitAudioIntoChunks(filePath: string): Promise<string[]> {
   const outputDir = path.join(os.tmpdir(), 'transcriber-temp');
-  await ensureDir(outputDir);
+  await mkdir(outputDir, { recursive: true });
 
   const { duration } = await getAudioInfo(filePath);
   const chunkDuration = 10 * 60; // 10 minutes per chunk
@@ -45,7 +45,7 @@ async function splitChunk(filePath: string, outputDir: string, index: number, ch
 async function downloadFromUrl(url: string): Promise<string> {
   const response = await axios.get(url, { responseType: 'arraybuffer' });
   const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
-  await ensureDir(tempDir);
+  await mkdir(tempDir, { recursive: true });
   const tempFilePath = path.join(tempDir, `input-${Date.now()}.mp3`);
   await fsPromises.writeFile(tempFilePath, response.data);
   return tempFilePath;
@@ -56,7 +56,7 @@ async function getAudioInfo(filePath: string): Promise<{ format: string; duratio
   await ffmpeg.writeFile('input', await fetchFile(filePath));
   await ffmpeg.exec(['-i', 'input', '-f', 'null', '-']);
   const log = await ffmpeg.readFile('ffmpeg-output.txt');
-  const logText = new TextDecoder().decode(log);
+  const logText = new TextDecoder().decode(new Uint8Array(log as ArrayBuffer));
   const format = logText.match(/Input #0, (\w+),/)?.[1] || 'unknown';
   const duration = parseFloat(logText.match(/Duration: (\d{2}:\d{2}:\d{2}\.\d{2})/)?.[1] || '0');
   const bitrate = parseInt(logText.match(/bitrate: (\d+) kb\/s/)?.[1] || '0') * 1000;
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
         const arrayBuffer = await file.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
         const tempDir = path.join(os.tmpdir(), 'transcriber-temp');
-        await ensureDir(tempDir);
+        await mkdir(tempDir, { recursive: true });
         audioFilePath = path.join(tempDir, `input-${Date.now()}.${file.name.split('.').pop()}`);
         await fsPromises.writeFile(audioFilePath, buffer);
         console.log(`Original file saved to: ${audioFilePath}`);
