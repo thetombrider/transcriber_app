@@ -11,7 +11,7 @@ import axios from 'axios';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const CHUNK_SIZE = 1 * 1024 * 1024; // 1 MB
+const CHUNK_SIZE = 20 * 1024 * 1024; // 20 MB
 
 async function splitAudioIntoChunks(filePath: string): Promise<string[]> {
   const outputDir = path.join(os.tmpdir(), 'transcriber-temp');

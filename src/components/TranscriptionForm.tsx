@@ -109,6 +109,11 @@ export default function TranscriptionForm() {
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
           </Button>
+          {file && (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Selected file: {file.name}
+            </Typography>
+          )}
         </Box>
         <TextField
           fullWidth
