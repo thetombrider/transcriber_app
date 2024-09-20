@@ -108,7 +108,7 @@ export default function TranscriptionForm() {
             <input
               type="file"
               hidden
-              accept="audio/*,video/*"
+              accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/webm,audio/ogg"
               onChange={handleFileChange}
             />
           </Button>

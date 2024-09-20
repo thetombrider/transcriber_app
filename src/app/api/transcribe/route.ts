@@ -96,24 +96,31 @@ export async function POST(req: NextRequest) {
 
         const chunk = chunks[i];
         const chunkStream = fs.createReadStream(chunk as string);
-        const transcription = await openai.audio.transcriptions.create({
-          file: chunkStream,
-          model: 'whisper-1',
-        });
-        fullTranscription += transcription.text + ' ';
+        try {
+          const transcription = await openai.audio.transcriptions.create({
+            file: chunkStream,
+            model: 'whisper-1',
+          });
+          fullTranscription += transcription.text + ' ';
 
-        const progress = Math.round(((i + 1) / chunks.length) * 100);
-        await writer.write(encoder.encode(JSON.stringify({ 
-          progress, 
-          transcription: fullTranscription.trim(),
-          chunkTranscription: transcription.text.trim(),
-          chunkProgress: {
-            current: i + 1,
-            total: chunks.length
+          const progress = Math.round(((i + 1) / chunks.length) * 100);
+          await writer.write(encoder.encode(JSON.stringify({ 
+            progress, 
+            transcription: fullTranscription.trim(),
+            chunkTranscription: transcription.text.trim(),
+            chunkProgress: {
+              current: i + 1,
+              total: chunks.length
+            }
+          }) + '\n'));
+
+          chunkStream.destroy();
+        } catch (error: any) {
+          if (error.response && error.response.status === 400) {
+            throw new Error('The audio file could not be decoded or its format is not supported.');
           }
-        }) + '\n'));
-
-        chunkStream.destroy();
+          throw error;
+        }
       }
 
       // Clean up temporary files
