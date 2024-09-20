@@ -3,9 +3,6 @@ import { useState, FormEvent } from 'react';
 import { Button, TextField, Typography, Box, CircularProgress, Paper, LinearProgress } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
-// Make sure this matches the MAX_FILE_SIZE in the API route
-//const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1 MB
-
 export default function TranscriptionForm() {
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState('');
@@ -16,6 +13,12 @@ export default function TranscriptionForm() {
   const [chunkProgress, setChunkProgress] = useState({ current: 0, total: 0 });
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [chunkTranscriptions, setChunkTranscriptions] = useState<string[]>([]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0]);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -106,7 +109,7 @@ export default function TranscriptionForm() {
               type="file"
               hidden
               accept="audio/*,video/*"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              onChange={handleFileChange}
             />
           </Button>
           {file && (
