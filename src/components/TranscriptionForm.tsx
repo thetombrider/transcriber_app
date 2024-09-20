@@ -24,11 +24,6 @@ export default function TranscriptionForm() {
       return;
     }
 
-    if (file && file.size > MAX_FILE_SIZE) {
-      setTranscription('Error: File size exceeds 1 MB limit. Please choose a smaller file or use a URL.');
-      return;
-    }
-
     setIsLoading(true);
     setProgress(0);
     setChunkProgress({ current: 0, total: 0 });
@@ -106,7 +101,7 @@ export default function TranscriptionForm() {
             startIcon={<CloudUploadIcon />}
             fullWidth
           >
-            Upload Audio File (Max 1 MB)
+            Upload Audio File
             <input
               type="file"
               hidden
@@ -114,11 +109,6 @@ export default function TranscriptionForm() {
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
           </Button>
-          {file && (
-            <Typography variant="body2" sx={{ mt: 1 }}>
-              Selected file: {file.name} ({(file.size / (1024 * 1024)).toFixed(2)} MB)
-            </Typography>
-          )}
         </Box>
         <TextField
           fullWidth
