@@ -10,9 +10,9 @@ export default function TranscriptionForm() {
   const [transcription, setTranscription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [chunkProgress, setChunkProgress] = useState({ current: 0, total: 0 });
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [chunkTranscriptions, setChunkTranscriptions] = useState<string[]>([]);
+  const [chunkProgress, setChunkProgress] = useState({ current: 0, total: 0 });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -35,13 +35,13 @@ export default function TranscriptionForm() {
     const formData = new FormData();
     if (file) formData.append('file', file);
     if (url) formData.append('url', url);
-    formData.append('apiKey', apiKey);
+    formData.append('api_key', apiKey);
 
     const controller = new AbortController();
     setAbortController(controller);
 
     try {
-      const response = await fetch('/api/transcribe', {
+      const response = await fetch('https://transcriber-api-goao.onrender.com/transcribe/file', {
         method: 'POST',
         body: formData,
         signal: controller.signal,
@@ -51,30 +51,9 @@ export default function TranscriptionForm() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader!.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const updates = chunk.split('\n').filter(Boolean).map(item => JSON.parse(item));
-
-        for (const update of updates) {
-          if (update.error) {
-            throw new Error(update.error);
-          }
-          setProgress(update.progress);
-          setTranscription(update.transcription);
-          if (update.chunkTranscription) {
-            setChunkTranscriptions(prev => [...prev, update.chunkTranscription]);
-          }
-          if (update.chunkProgress) {
-            setChunkProgress(update.chunkProgress);
-          }
-        }
-      }
+      const result = await response.json();
+      setProgress(100);
+      setTranscription(result.transcription);
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'AbortError') {
         setTranscription('Transcription cancelled');
