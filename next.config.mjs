@@ -11,9 +11,6 @@ const nextConfig = {
     }
     return config;
   },
-  experimental: {
-    serverComponentsExternalPackages: ['fluent-ffmpeg', '@ffmpeg-installer/ffmpeg', 'ytdl-core'],
-  },
 };
 
 export default nextConfig;

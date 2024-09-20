@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
@@ -9,7 +9,7 @@ import os from 'os';
 import { ensureDir } from 'fs-extra';
 import axios from 'axios';
 
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+let ffmpeg: FFmpeg | null = null;
 
 //const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -29,19 +29,17 @@ async function splitAudioIntoChunks(filePath: string): Promise<string[]> {
 }
 
 async function splitChunk(filePath: string, outputDir: string, index: number, chunkDuration: number, totalDuration: number): Promise<string> {
+  const ffmpeg = await initFFmpeg();
   const outputPath = path.join(outputDir, `chunk_${index}${path.extname(filePath)}`);
   const start = index * chunkDuration;
   const duration = Math.min(chunkDuration, totalDuration - start);
 
-  return new Promise((resolve, reject) => {
-    ffmpeg(filePath)
-      .setStartTime(start)
-      .setDuration(duration)
-      .output(outputPath)
-      .on('end', () => resolve(outputPath))
-      .on('error', reject)
-      .run();
-  });
+  await ffmpeg.writeFile('input', await fetchFile(filePath));
+  await ffmpeg.exec(['-ss', start.toString(), '-i', 'input', '-t', duration.toString(), '-c', 'copy', 'output']);
+  const outputData = await ffmpeg.readFile('output');
+  await fsPromises.writeFile(outputPath, outputData);
+
+  return outputPath;
 }
 
 async function downloadFromUrl(url: string): Promise<string> {
@@ -54,19 +52,26 @@ async function downloadFromUrl(url: string): Promise<string> {
 }
 
 async function getAudioInfo(filePath: string): Promise<{ format: string; duration: number; bitrate: number }> {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve({
-          format: metadata.format.format_name?.split(',')[0] || 'unknown',
-          duration: metadata.format.duration || 0,
-          bitrate: metadata.format.bit_rate ? parseInt(String(metadata.format.bit_rate)) : 0,
-        });
-      }
-    });
+  const ffmpeg = await initFFmpeg();
+  await ffmpeg.writeFile('input', await fetchFile(filePath));
+  await ffmpeg.exec(['-i', 'input', '-f', 'null', '-']);
+  const log = await ffmpeg.readFile('ffmpeg-output.txt');
+  const logText = new TextDecoder().decode(log);
+  const format = logText.match(/Input #0, (\w+),/)?.[1] || 'unknown';
+  const duration = parseFloat(logText.match(/Duration: (\d{2}:\d{2}:\d{2}\.\d{2})/)?.[1] || '0');
+  const bitrate = parseInt(logText.match(/bitrate: (\d+) kb\/s/)?.[1] || '0') * 1000;
+  return { format, duration, bitrate };
+}
+
+async function initFFmpeg() {
+  if (ffmpeg) return ffmpeg;
+  ffmpeg = new FFmpeg();
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.2/dist/umd';
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
   });
+  return ffmpeg;
 }
 
 export async function POST(req: NextRequest) {
