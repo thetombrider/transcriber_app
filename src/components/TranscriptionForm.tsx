@@ -13,6 +13,7 @@ export default function TranscriptionForm() {
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [chunkTranscriptions, setChunkTranscriptions] = useState<string[]>([]);
   const [chunkProgress, setChunkProgress] = useState({ current: 0, total: 0 });
+  const [jobId, setJobId] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -52,6 +53,7 @@ export default function TranscriptionForm() {
       }
 
       const result = await response.json();
+      setJobId(result.job_id);
       setProgress(100);
       setTranscription(result.transcription);
     } catch (error: unknown) {
@@ -67,7 +69,21 @@ export default function TranscriptionForm() {
     }
   };
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
+    if (jobId) {
+      try {
+        const response = await fetch(`https://transcriber-api-goao.onrender.com/cancel_transcription/${jobId}`, {
+          method: 'POST',
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const result = await response.json();
+        console.log(result.message);
+      } catch (error) {
+        console.error('Error cancelling transcription:', error);
+      }
+    }
     if (abortController) {
       abortController.abort();
     }
